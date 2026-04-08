@@ -571,37 +571,38 @@ Example:
     </div>
 
     <script>
-        const API_URL = window.location.origin.replace(/:\d+/, ':8000');
+        const API_URL = window.location.origin;
 
         async function triggerIncident() {
             const logInput = document.getElementById('logInput').value.trim();
             const statusDiv = document.getElementById('triggerStatus');
 
-            if (!logInput) {
-                statusDiv.className = 'status error';
-                statusDiv.innerHTML = '<i class="fas fa-times-circle"></i> Please enter logs or alert data';
-                return;
-            }
+            // Use default fire incident if no input provided
+            const alert = logInput ? 
+                (() => { try { return JSON.parse(logInput); } catch { return { event_type: 'RAW_LOGS', raw_logs: logInput }; } })() 
+                : {
+                    "alert": {
+                        "service": "fire-detection",
+                        "severity": "critical",
+                        "description": "Fire detected in data center floor 3, sector B",
+                        "error_rate": 0,
+                        "affected_users": 5000,
+                        "region": "us-west-2",
+                        "deployment_id": "dc-floor-3",
+                        "likely_cause": "Electrical overload in rack 3-14",
+                        "suggested_action": "Evacuate area immediately and trigger fire suppression system"
+                    }
+                };
 
             statusDiv.className = 'status loading';
             statusDiv.innerHTML = '<i class="fas fa-circle-notch spinner"></i> Processing incident...';
 
             try {
-                let alert;
-                try {
-                    alert = JSON.parse(logInput);
-                } catch {
-                    alert = {
-                        event_type: 'RAW_LOGS',
-                        raw_logs: logInput
-                    };
-                }
-
-                const response = await fetch(`${API_URL}/webhook`, {
+                const response = await fetch(`${API_URL}/webhook/monitoring-alert`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + (new Date().getTime().toString())
+                        'x-simulator-secret': 'crisis-dev-secret'
                     },
                     body: JSON.stringify(alert)
                 });
@@ -625,7 +626,7 @@ Example:
             const list = document.getElementById('incidentsList');
 
             try {
-                const response = await fetch(`${API_URL}/api/incidents`);
+                const response = await fetch(`${API_URL}/incidents`);
                 let incidents = [];
 
                 if (response.ok) {
