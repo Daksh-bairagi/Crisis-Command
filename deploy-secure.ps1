@@ -4,7 +4,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$ProjectId = "your-legal-ai-project"
+    [string]$ProjectId =  $env_hash["GOOGLE_CLOUD_PROJECT"]
 )
 
 Write-Host "🔐 SECURE CRISISCOMMAND DEPLOYMENT" -ForegroundColor Cyan
