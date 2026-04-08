@@ -231,6 +231,27 @@ async def health():
         "version":"0.1.0"
     }
 
+@app.get("/incidents")
+async def get_incidents():
+    """Get list of recent incidents for the dashboard"""
+    # Return mock incidents since DB is not available
+    return {
+        "incidents": [
+            {
+                "incident_id": "DEMO-001",
+                "service": "demo-service",
+                "severity": "P0",
+                "status": "active",
+                "description": "Ready to receive incidents",
+                "affected_users": 0,
+                "error_rate": 0,
+                "detected_at": "2026-04-08T05:30:00Z",
+                "likely_cause": "Waiting for incidents",
+                "suggested_action": "Ready to respond"
+            }
+        ]
+    }
+
 
 
 
