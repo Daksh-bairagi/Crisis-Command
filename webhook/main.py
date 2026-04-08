@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request,HTTPException,BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 import hmac
 import hashlib
 import json
@@ -9,11 +10,28 @@ import asyncio
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import get_logger
-from orchestrator.agent import process_incident_alert
-from database.db import update_incident_status
+
+# Optional database imports - app works without database
+try:
+    from orchestrator.agent import process_incident_alert
+    from database.db import update_incident_status, store_incident, log_trace
+    DB_AVAILABLE = True
+except Exception as e:
+    log_msg = f"Database not available: {str(e)}"
+    process_incident_alert = None
+    update_incident_status = None
+    store_incident = None
+    log_trace = None
+    DB_AVAILABLE = False
 
 log= get_logger("webhook")
+if not DB_AVAILABLE:
+    log.warning("Running in database-less mode. Core features disabled.")
 app= FastAPI(title="CrisisCommand Webhook", description="Webhook for CrisisCommand to receive alerts and trigger actions.", version="1.0")
+
+# Serve static UI files
+UI_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ui")
+app.mount("/ui", StaticFiles(directory=UI_PATH), name="ui")
 
 
 def verify_chat_request(headers:dict)->bool:
@@ -174,6 +192,10 @@ async def handle_monitoring_alert(body:dict):
     
     Calls the orchestrator agent to coordinate incident response.
     """
+    if not DB_AVAILABLE:
+        log.warning("Database not available - skipping incident processing")
+        return
+    
     alert = body.get("alert", {})
     service = alert.get("service", "unknown")
     description = alert.get("description", "No description provided")
@@ -188,6 +210,14 @@ async def handle_monitoring_alert(body:dict):
         log.info(f"✅ Incident orchestrated: {result.get('incident_id')} ({result.get('severity')})")
     else:
         log.error(f"❌ Orchestration failed: {result.get('error')}")
+
+@app.get("/")
+async def root():
+    """Serve dashboard.html at root"""
+    dashboard_path = os.path.join(UI_PATH, "dashboard.html")
+    if os.path.exists(dashboard_path):
+        return FileResponse(dashboard_path, media_type="text/html")
+    return {"message": "Dashboard not found"}
 
 @app.get("/health")
 async def health():
