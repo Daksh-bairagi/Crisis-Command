@@ -25,17 +25,36 @@ INCIDENT_MEMORY_INDEX_NAME = "incident_memory_embedding_idx"
 INCIDENT_MEMORY_VECTOR_TYPE = f"vector({EMBEDDING_DIMENSION})"
 INCIDENT_MEMORY_HALFVEC_TYPE = f"halfvec({EMBEDDING_DIMENSION})"
 
-engine = create_async_engine(DATABASE_URL, echo=False)
-AsyncSessionLocal = async_sessionmaker(
-    engine, expire_on_commit=False, class_=AsyncSession
-)
+# Lazy initialization - don't create engine on import
+_engine = None
+_AsyncSessionLocal = None
+
+def _get_engine():
+    """Get or create the async engine (lazy initialization)"""
+    global _engine
+    if _engine is None:
+        _engine = create_async_engine(DATABASE_URL, echo=False)
+    return _engine
+
+def _get_session_local():
+    """Get or create the async session factory (lazy initialization)"""
+    global _AsyncSessionLocal
+    if _AsyncSessionLocal is None:
+        _AsyncSessionLocal = async_sessionmaker(
+            _get_engine(), expire_on_commit=False, class_=AsyncSession
+        )
+    return _AsyncSessionLocal
+
+# Backward compatibility - reference these functions instead of module-level vars
+engine = None
+AsyncSessionLocal = None
 
 # ─── INCIDENT OPERATIONS ────────────────────────────────────────────────────
 
 async def store_incident(classification) -> bool:
     """Store a new incident from classifier output"""
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             await session.execute(text("""
                 INSERT INTO incidents 
                 (id, service, severity, description, likely_cause, 
@@ -72,7 +91,7 @@ async def get_active_incident_for_service(service: str) -> Optional[dict]:
     If yes, we append to it instead of creating a new one.
     """
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             result = await session.execute(text("""
                 SELECT id, severity, status, detected_at
                 FROM incidents
@@ -104,7 +123,7 @@ async def update_incident_status(
 ) -> bool:
     """Update incident status and optional metadata"""
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             updates = {"status": status, "id": incident_id}
             set_clauses = ["status = :status"]
 
@@ -141,7 +160,7 @@ async def update_incident_status(
 async def get_incident(incident_id: str) -> Optional[dict]:
     """Fetch full incident record"""
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             result = await session.execute(text("""
                 SELECT id, service, severity, description, likely_cause,
                        suggested_action, affected_users, status,
@@ -172,7 +191,7 @@ async def get_incident(incident_id: str) -> Optional[dict]:
 async def ensure_incident_memory_vector_dimension() -> bool:
     """Resize incident_memory.embedding to match the active embedding model."""
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             result = await session.execute(text("""
                 SELECT pg_catalog.format_type(a.atttypid, a.atttypmod)
                 FROM pg_attribute a
@@ -237,7 +256,7 @@ async def store_incident_memory(
         return False
 
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             await session.execute(text("""
                 INSERT INTO incident_memory (incident_id, content, embedding, source)
                 VALUES (:incident_id, :content, :embedding, :source)
@@ -272,7 +291,7 @@ async def search_similar_incidents(
         return []
 
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             candidate_limit = max(limit * 5, 20)
             result = await session.execute(text(f"""
                 WITH nearest_results AS MATERIALIZED (
@@ -319,7 +338,7 @@ async def log_trace(
 ) -> bool:
     """Log agent action to trace table — powers the trace UI"""
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             await session.execute(text("""
                 INSERT INTO agent_traces
                 (session_id, agent_name, action, input_data, output_data, duration_ms)
@@ -342,7 +361,7 @@ async def log_trace(
 async def get_recent_traces(limit: int = 50) -> list[dict]:
     """Fetch recent traces for the trace UI"""
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             result = await session.execute(text("""
                 SELECT session_id, agent_name, action, 
                        input_data, output_data, duration_ms, timestamp
@@ -372,7 +391,7 @@ async def get_recent_traces(limit: int = 50) -> list[dict]:
 
 async def test_connection():
     try:
-        async with AsyncSessionLocal() as session:
+        async with _get_session_local()() as session:
             result = await session.execute(text("SELECT version()"))
             version = result.fetchone()[0]
             log.info("DB connected: %s", version[:50])
