@@ -94,6 +94,19 @@ async def webhook_handler(request:Request,background_tasks:BackgroundTasks):
     else:
         log.warning(f"Unknown event type: {event_type}")
         return JSONResponse(content={"status": "ignored"})
+
+@app.post("/webhook/monitoring-alert")
+async def monitoring_alert_handler(request:Request, background_tasks:BackgroundTasks):
+    """Direct endpoint for monitoring alerts (used by dashboard UI)"""
+    body = await request.json()
+    headers = dict(request.headers)
+    
+    if not verify_simulator_request(headers):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    # Process monitoring alert in background
+    background_tasks.add_task(handle_monitoring_alert, body)
+    return JSONResponse(content={"status": "Alert received", "message": "Processing alert in background"})
     
 async def handle_chat_event(
     event_type: str,
