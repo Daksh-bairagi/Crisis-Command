@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrisisCommand - Incident Response Command Center</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --secondary: #ec4899;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --success: #10b981;
+            --dark: #0f172a;
+            --dark-2: #1e293b;
+            --dark-3: #334155;
+            --light: #f1f5f9;
+            --text: #e2e8f0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, var(--dark) 0%, #1a1f3a 100%);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Animated background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background:
+                radial-gradient(circle at 20% 50%, rgba(99, 102, 241, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(236, 72, 153, 0.1) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+            animation: slideDown 0.8s ease-out;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        header h1 {
+            font-size: 3.5em;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 15px;
+            letter-spacing: -1px;
+        }
+
+        header p {
+            font-size: 1.1em;
+            color: var(--text);
+            opacity: 0.8;
+            font-weight: 300;
+        }
+
+        /* Status indicator */
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        /* Grid Layout */
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            margin-bottom: 40px;
+        }
+
+        .card {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-radius: 16px;
+            padding: 35px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+            transition: all 0.3s ease;
+            animation: fadeIn 0.8s ease-out forwards;
+            opacity: 0;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .card:nth-child(1) {
+            animation-delay: 0.1s;
+        }
+
+        .card:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .card:nth-child(3) {
+            animation-delay: 0.3s;
+        }
+
+        .card:nth-child(4) {
+            animation-delay: 0.4s;
+        }
+
+        .card:hover {
+            border-color: rgba(99, 102, 241, 0.4);
+            box-shadow: 0 25px 50px rgba(99, 102, 241, 0.2);
+            transform: translateY(-5px);
+        }
+
+        .card h2 {
+            font-size: 1.4em;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--light);
+        }
+
+        .card h2 i {
+            color: var(--primary);
+            font-size: 1.3em;
+        }
+
+        /* Input Styles */
+        textarea,
+        input {
+            width: 100%;
+            padding: 15px;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            resize: vertical;
+            min-height: 120px;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+        }
+
+        textarea:focus,
+        input:focus {
+            outline: none;
+            border-color: var(--primary);
+            background: rgba(15, 23, 42, 0.8);
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
+        }
+
+        /* Button Styles */
+        button {
+            width: 100%;
+            padding: 14px 24px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        button:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(99, 102, 241, 0.3);
+        }
+
+        button:active {
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            background: var(--dark-3);
+            cursor: not-allowed;
+        }
+
+        /* Status Messages */
+        .status {
+            margin-top: 15px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideUp 0.3s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .status.success {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .status.error {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .status.loading {
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        /* Incidents List */
+        .incidents-list {
+            max-height: 550px;
+            overflow-y: auto;
+            padding-right: 10px;
+        }
+
+        .incidents-list::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .incidents-list::-webkit-scrollbar-track {
+            background: rgba(99, 102, 241, 0.1);
+            border-radius: 10px;
+        }
+
+        .incidents-list::-webkit-scrollbar-thumb {
+            background: var(--primary);
+            border-radius: 10px;
+        }
+
+        .incident-item {
+            padding: 16px;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-radius: 8px;
+            margin-bottom: 12px;
+            background: rgba(15, 23, 42, 0.4);
+            transition: all 0.3s ease;
+            border-left: 4px solid var(--primary);
+        }
+
+        .incident-item:hover {
+            background: rgba(15, 23, 42, 0.6);
+            border-color: rgba(99, 102, 241, 0.5);
+        }
+
+        .incident-item.p0 {
+            border-left-color: var(--danger);
+        }
+
+        .incident-item.p1 {
+            border-left-color: var(--warning);
+        }
+
+        .incident-item.p2 {
+            border-left-color: var(--success);
+        }
+
+        .incident-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .incident-id {
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+            color: var(--primary);
+        }
+
+        .severity {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .severity.p0 {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--danger);
+        }
+
+        .severity.p1 {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+        }
+
+        .severity.p2 {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+
+        .incident-details {
+            font-size: 0.85em;
+            color: var(--text);
+            opacity: 0.8;
+        }
+
+        .incident-details p {
+            margin: 4px 0;
+        }
+
+        .detail-label {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        /* Links Section */
+        .links-section {
+            margin-top: 30px;
+        }
+
+        .links-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .link-btn {
+            padding: 20px;
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 8px;
+            color: var(--text);
+            text-decoration: none;
+            text-align: center;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+            height: 100%;
+        }
+
+        .link-btn:hover {
+            background: rgba(99, 102, 241, 0.2);
+            border-color: var(--primary);
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2);
+        }
+
+        .link-btn i {
+            font-size: 2em;
+            color: var(--primary);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            header h1 {
+                font-size: 2em;
+            }
+
+            .container {
+                padding: 20px 15px;
+            }
+
+            .card {
+                padding: 20px;
+            }
+
+            .links-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            }
+        }
+
+        /* Loading animation */
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .spinner {
+            display: inline-block;
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1><i class="fas fa-bolt"></i> CrisisCommand</h1>
+            <p>Intelligent Multi-Agent Incident Response System</p>
+            <div class="status-bar">
+                <div class="status-item">
+                    <div class="status-indicator"></div>
+                    <span>System Online</span>
+                </div>
+                <div class="status-item">
+                    <span>🤖 AI Classification</span>
+                </div>
+                <div class="status-item">
+                    <span>📡 Real-time Sync</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="grid">
+            <!-- Incident Trigger -->
+            <div class="card">
+                <h2><i class="fas fa-fire"></i> Trigger Incident</h2>
+                <textarea id="logInput" placeholder="Paste raw logs or JSON alert...
+Example:
+[2026-04-07 19:00:00] ERROR payment-service: Connection timeout
+[2026-04-07 19:00:01] ERROR payment-service: Failed to process order
+[2026-04-07 19:00:02] ALERT: Payment failure rate 99%"></textarea>
+                <button onclick="triggerIncident()"><i class="fas fa-paper-plane"></i> Fire Incident</button>
+                <div id="triggerStatus"></div>
+            </div>
+
+            <!-- Incident History -->
+            <div class="card">
+                <h2><i class="fas fa-history"></i> Recent Incidents</h2>
+                <div class="incidents-list" id="incidentsList">
+                    <p style="color: var(--text); opacity: 0.6; text-align: center;">
+                        <i class="fas fa-circle-notch spinner"></i> Loading incidents...
+                    </p>
+                </div>
+                <button onclick="refreshIncidents()" style="margin-top: 15px;"><i class="fas fa-sync"></i>
+                    Refresh</button>
+            </div>
+        </div>
+
+        <!-- Links Section -->
+        <div class="card links-section">
+            <h2><i class="fas fa-external-link-alt"></i> Integrated Platforms</h2>
+            <p style="margin-bottom: 20px; opacity: 0.8;">Click to access incident results across Google Workspace:</p>
+            <div class="links-grid">
+                <a href="https://mail.google.com/chat/" target="_blank" class="link-btn">
+                    <i class="fas fa-comments"></i>
+                    <span>Google Chat</span>
+                </a>
+                <a href="https://drive.google.com/" target="_blank" class="link-btn">
+                    <i class="fas fa-file-alt"></i>
+                    <span>Google Docs</span>
+                </a>
+                <a href="https://calendar.google.com/" target="_blank" class="link-btn">
+                    <i class="fas fa-calendar"></i>
+                    <span>Google Calendar</span>
+                </a>
+                <a href="https://meet.google.com/" target="_blank" class="link-btn">
+                    <i class="fas fa-video"></i>
+                    <span>Google Meet</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin.replace(/:\d+/, ':8000');
+
+        async function triggerIncident() {
+            const logInput = document.getElementById('logInput').value.trim();
+            const statusDiv = document.getElementById('triggerStatus');
+
+            if (!logInput) {
+                statusDiv.className = 'status error';
+                statusDiv.innerHTML = '<i class="fas fa-times-circle"></i> Please enter logs or alert data';
+                return;
+            }
+
+            statusDiv.className = 'status loading';
+            statusDiv.innerHTML = '<i class="fas fa-circle-notch spinner"></i> Processing incident...';
+
+            try {
+                let alert;
+                try {
+                    alert = JSON.parse(logInput);
+                } catch {
+                    alert = {
+                        event_type: 'RAW_LOGS',
+                        raw_logs: logInput
+                    };
+                }
+
+                const response = await fetch(`${API_URL}/webhook`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + (new Date().getTime().toString())
+                    },
+                    body: JSON.stringify(alert)
+                });
+
+                if (response.ok) {
+                    statusDiv.className = 'status success';
+                    statusDiv.innerHTML = '<i class="fas fa-check-circle"></i> Incident triggered! Check the list below.';
+                    document.getElementById('logInput').value = '';
+                    setTimeout(() => refreshIncidents(), 2000);
+                } else {
+                    statusDiv.className = 'status error';
+                    statusDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> Failed: ' + response.statusText;
+                }
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> Error: ' + error.message;
+            }
+        }
+
+        async function refreshIncidents() {
+            const list = document.getElementById('incidentsList');
+
+            try {
+                const response = await fetch(`${API_URL}/api/incidents`);
+                let incidents = [];
+
+                if (response.ok) {
+                    incidents = await response.json();
+                } else {
+                    incidents = [{
+                        incident_id: 'DEMO-001',
+                        severity: 'P0',
+                        service: 'demo-service',
+                        likely_cause: 'Ready to receive incidents',
+                        created_at: new Date().toISOString().split('T')[0],
+                        affected_users: 'Waiting...'
+                    }];
+                }
+
+                displayIncidents(incidents);
+            } catch (error) {
+                list.innerHTML = '<p style="color: var(--danger);">Unable to load incidents</p>';
+            }
+        }
+
+        function displayIncidents(incidents) {
+            const list = document.getElementById('incidentsList');
+
+            if (!incidents || incidents.length === 0) {
+                list.innerHTML = '<p style="color: var(--text); opacity: 0.6; text-align: center;">No incidents yet. Fire one to start!</p>';
+                return;
+            }
+
+            incidents = incidents.reverse();
+
+            list.innerHTML = incidents.slice(0, 10).map(inc => `
+                <div class="incident-item ${inc.severity ? inc.severity.toLowerCase() : 'p2'}">
+                    <div class="incident-header">
+                        <span class="incident-id">${inc.incident_id}</span>
+                        <span class="severity ${inc.severity ? inc.severity.toLowerCase() : 'p2'}">${inc.severity || 'P2'}</span>
+                    </div>
+                    <div class="incident-details">
+                        <p><span class="detail-label">Service:</span> ${inc.service || 'unknown'}</p>
+                        <p><span class="detail-label">Cause:</span> ${inc.likely_cause || 'Analyzing...'}</p>
+                        <p><span class="detail-label">Users:</span> ${inc.affected_users || 'calculating'}</p>
+                        <p><span class="detail-label">Time:</span> ${new Date(inc.created_at).toLocaleString()}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        refreshIncidents();
+        setInterval(refreshIncidents, 5000);
+    </script>
+</body>
+
+</html>

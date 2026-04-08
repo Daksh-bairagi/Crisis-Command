@@ -1,0 +1,36 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: crisiscommand-webhook
+spec:
+  template:
+    spec:
+      containers:
+      - image: gcr.io/PROJECT_ID/crisiscommand-webhook
+        ports:
+        - containerPort: 8000
+        env:
+        - name: GOOGLE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: crisiscommand-secrets
+              key: GOOGLE_API_KEY
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: crisiscommand-secrets
+              key: DATABASE_URL
+        - name: SIMULATOR_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: crisiscommand-secrets
+              key: SIMULATOR_SECRET
+        - name: CHAT_SPACE_ID
+          valueFrom:
+            secretKeyRef:
+              name: crisiscommand-secrets
+              key: CHAT_SPACE_ID
+        resources:
+          limits:
+            cpu: "1"
+            memory: "512Mi"

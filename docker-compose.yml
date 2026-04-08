@@ -1,0 +1,15 @@
+services:
+  postgres:
+    build: .
+    container_name: crisiscommand-db
+    environment:
+      POSTGRES_PASSWORD: crisis_dev
+      POSTGRES_DB: crisiscommand
+      POSTGRES_USER: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
