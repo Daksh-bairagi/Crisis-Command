@@ -192,10 +192,6 @@ async def handle_monitoring_alert(body:dict):
     
     Calls the orchestrator agent to coordinate incident response.
     """
-    if not DB_AVAILABLE:
-        log.warning("Database not available - skipping incident processing")
-        return
-    
     alert = body.get("alert", {})
     service = alert.get("service", "unknown")
     description = alert.get("description", "No description provided")
@@ -203,13 +199,16 @@ async def handle_monitoring_alert(body:dict):
     log.info("🚨 Processing alert | Service: %s", service)
     log.info("Description: %s", description)
     
-    # Call orchestrator to handle the incident
-    result = await process_incident_alert(alert)
-    
-    if result.get("success"):
-        log.info(f"✅ Incident orchestrated: {result.get('incident_id')} ({result.get('severity')})")
+    # Call orchestrator to handle the incident (if available)
+    if process_incident_alert:
+        result = await process_incident_alert(alert)
+        
+        if result.get("success"):
+            log.info(f"✅ Incident orchestrated: {result.get('incident_id')} ({result.get('severity')})")
+        else:
+            log.error(f"❌ Orchestration failed: {result.get('error')}")
     else:
-        log.error(f"❌ Orchestration failed: {result.get('error')}")
+        log.warning("Orchestrator not available - incident logged but not processed")
 
 @app.get("/")
 async def root():
