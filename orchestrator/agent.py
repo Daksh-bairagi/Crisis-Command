@@ -7,9 +7,7 @@ Main coordinator that orchestrates incident response by calling MCP-based tools 
 import os
 import sys
 import asyncio
-from datetime import datetime
 import json
-import importlib.util
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
@@ -19,17 +17,33 @@ load_dotenv()
 
 from logger import get_logger
 from orchestrator.classifier import classify, IncidentClassification
+from orchestrator.mcp_clients import create_mcp_client
+from orchestrator.doc_analysis_agent import generate_doc_analysis
 from database.db import (
-    store_incident, 
+    store_incident,
     store_incident_memory,
     search_similar_incidents,
-    log_trace
+    log_trace,
+    get_active_incident_for_service,
 )
 
 import google.generativeai as genai
 
 log = get_logger("orchestrator")
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+EXTERNAL_CALL_TIMEOUT_SECONDS = float(os.getenv("EXTERNAL_CALL_TIMEOUT_SECONDS", "8"))
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+EXTERNAL_ACTIONS_ENABLED = _env_flag("ENABLE_EXTERNAL_ACTIONS", bool(os.getenv("K_SERVICE")))
+GENAI_FEATURES_ENABLED = _env_flag("ENABLE_GENAI_FEATURES", bool(os.getenv("K_SERVICE")))
+DATABASE_ENABLED = _env_flag("ENABLE_DATABASE", bool(os.getenv("K_SERVICE")))
 
 
 # ─── MAIN ORCHESTRATOR AGENT ────────────────────────────────────
@@ -39,6 +53,9 @@ class IncidentOrchestrator:
 
     def __init__(self):
         self.session_id = None
+        self.chat_client = create_mcp_client("agents/chat_agent/mcp_server.py", "chat-mcp")
+        self.docs_client = create_mcp_client("agents/docs_agent/mcp_server.py", "docs-mcp")
+        self.calendar_client = create_mcp_client("agents/calendar_agent/mcp_server.py", "calendar-mcp")
 
     async def process_alert(self, alert: dict) -> dict:
         """Main orchestration flow"""
@@ -47,7 +64,26 @@ class IncidentOrchestrator:
         
         try:
             log.info(f"[{self.session_id}] ▶️  Orchestrating: {alert.get('service')}")
-            
+
+            # Deduplication: if an active P0/P1 already exists for this service,
+            # suppress the new alert. Alert storms on a broken service should not
+            # produce 50 duplicate Chat cards, Docs, and Calendar events.
+            if DATABASE_ENABLED:
+                existing = await get_active_incident_for_service(alert.get("service", ""))
+                if existing and existing.get("severity") in ("P0", "P1"):
+                    log.info(
+                        f"[{self.session_id}] Duplicate suppressed — active {existing['severity']} "
+                        f"incident {existing['incident_id']} already exists for {alert.get('service')}."
+                    )
+                    return {
+                        "success": True,
+                        "deduplicated": True,
+                        "incident_id": existing["incident_id"],
+                        "severity": existing["severity"],
+                        "service": alert.get("service"),
+                        "message": "Duplicate alert suppressed — incident already active.",
+                    }
+
             # Step 1: Classify
             log.info(f"[{self.session_id}] Step 1: Classifying alert...")
             classification = await classify(alert)
@@ -55,16 +91,22 @@ class IncidentOrchestrator:
             
             # Step 2: Search for similar incidents
             log.info(f"[{self.session_id}] Step 2: Searching similar incidents...")
-            similar = await self._search_similar_incidents(alert)
+            similar = await self._search_similar_incidents(alert) if DATABASE_ENABLED else []
             similar_text = similar[0]["content"] if similar else ""
             
             # Step 3: Store incident
-            log.info(f"[{self.session_id}] Step 3: Storing incident...")
-            if not await store_incident(classification):
-                raise Exception("Failed to store incident")
+            if DATABASE_ENABLED:
+                log.info(f"[{self.session_id}] Step 3: Storing incident...")
+                if not await store_incident(classification):
+                    log.warning(
+                        f"[{self.session_id}] Persistent storage unavailable. Continuing in local/degraded mode."
+                    )
+            else:
+                log.info(f"[{self.session_id}] Step 3: Database disabled in local mode.")
             
             # Step 4: Create memory for RAG
-            await self._create_incident_memory(classification)
+            if DATABASE_ENABLED:
+                await self._create_incident_memory(classification)
             
             # Step 5: Call MCP tools
             log.info(f"[{self.session_id}] Step 5: Calling MCP tools...")
@@ -78,32 +120,73 @@ class IncidentOrchestrator:
                 "meet_url": None,
                 "similar_incident": similar[0] if similar else None
             }
-            
-            # Invoke Chat Agent
-            if classification.activate_chat:
-                log.info(f"[{self.session_id}] → Invoking ChatAgent...")
-                chat_result = await self._post_to_chat(classification, similar_text)
-                response["chat_message"] = chat_result.get("message_id")
-            
-            # Invoke Docs Agent
-            if classification.activate_docs:
-                log.info(f"[{self.session_id}] → Invoking DocsAgent...")
-                docs_result = await self._create_doc(classification, similar_text)
-                response["doc_url"] = docs_result.get("doc_url")
-            
-            # Invoke Calendar Agent
-            if classification.activate_calendar:
-                log.info(f"[{self.session_id}] → Invoking CalendarAgent...")
-                cal_result = await self._block_calendar(classification)
-                response["meet_url"] = cal_result.get("meet_url")
-                
-                # Post Meet link to Chat
-                if cal_result.get("success") and cal_result.get("meet_url"):
-                    await self._post_meet_to_chat(classification, cal_result.get("meet_url"))
-            
+
+            if EXTERNAL_ACTIONS_ENABLED:
+                # Build coroutine map based on severity, then dispatch in parallel.
+                # asyncio.gather fires Chat + Docs + Calendar simultaneously instead of
+                # sequentially (which would stack up to 3× the timeout on the critical path).
+                coros: dict = {}
+                if classification.activate_chat:
+                    coros["chat"] = self._post_to_chat(classification, similar_text)
+                if classification.activate_docs:
+                    coros["docs"] = self._create_doc(classification, similar_text, alert)
+                if classification.activate_calendar:
+                    coros["calendar"] = self._block_calendar(classification)
+
+                if coros:
+                    log.info(
+                        f"[{self.session_id}] Dispatching {list(coros.keys())} in parallel..."
+                    )
+                    names = list(coros.keys())
+                    gathered = await asyncio.gather(*coros.values(), return_exceptions=True)
+
+                    meet_url: str | None = None
+                    for name, result in zip(names, gathered):
+                        if isinstance(result, Exception):
+                            log.error(f"[{self.session_id}] {name} agent raised: {result}")
+                            continue
+                        if name == "chat":
+                            response["chat_message"] = result.get("message_id")
+                        elif name == "docs":
+                            response["doc_url"] = result.get("doc_url")
+                        elif name == "calendar":
+                            response["meet_url"] = result.get("meet_url")
+                            if result.get("success") and result.get("meet_url"):
+                                meet_url = result["meet_url"]
+
+                    if meet_url:
+                        await self._post_meet_to_chat(classification, meet_url)
+            else:
+                log.info(
+                    f"[{self.session_id}] External actions disabled. Skipping Chat/Docs/Calendar side effects."
+                )
+
+            # ─── PHASE 2: Background incident analysis ────────────────────
+            # The ADK doc-analysis agent runs GitHub + Cloud Logging + RAG investigations,
+            # writes findings to the doc, and posts a summary to Chat.
+            # Fire-and-forget: orchestrator response is not blocked on this.
+            if GENAI_FEATURES_ENABLED:
+                doc_url = response.get("doc_url")
+                doc_id = _extract_doc_id(doc_url) if doc_url else None
+                log.info(
+                    f"[{self.session_id}] Phase 2: dispatching ADK incident analysis "
+                    f"(doc_id={doc_id or 'none'})"
+                )
+                asyncio.create_task(
+                    generate_doc_analysis(alert, classification, doc_id=doc_id)
+                )
+
             # Log trace
-            await log_trace(self.session_id, "orchestrator", "process_alert", 
-                          input_data={"alert": alert}, output_data=response)
+            if DATABASE_ENABLED:
+                trace_logged = await log_trace(
+                    self.session_id,
+                    "orchestrator",
+                    "process_alert",
+                    input_data={"alert": alert},
+                    output_data=response,
+                )
+                if not trace_logged:
+                    log.warning(f"[{self.session_id}] Trace logging unavailable.")
             
             log.info(f"[{self.session_id}] ✅ Done: {classification.incident_id}")
             return response
@@ -114,11 +197,17 @@ class IncidentOrchestrator:
 
     async def _search_similar_incidents(self, alert: dict) -> list[dict]:
         """Generate embedding using gemini-embedding-001"""
+        if not os.getenv("GOOGLE_API_KEY") or not GENAI_FEATURES_ENABLED:
+            return []
         try:
-            response = genai.embed_content(
-                model="models/gemini-embedding-001",
-                content=f"{alert.get('service')}: {alert.get('description')}",
-                task_type="RETRIEVAL_DOCUMENT"
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    genai.embed_content,
+                    model="models/gemini-embedding-001",
+                    content=f"{alert.get('service')}: {alert.get('description')}",
+                    task_type="RETRIEVAL_DOCUMENT",
+                ),
+                timeout=EXTERNAL_CALL_TIMEOUT_SECONDS,
             )
             embedding = response['embedding']
             results = await search_similar_incidents(embedding, limit=3)
@@ -129,12 +218,18 @@ class IncidentOrchestrator:
 
     async def _create_incident_memory(self, classification: IncidentClassification):
         """Store incident as memory for future RAG"""
+        if not os.getenv("GOOGLE_API_KEY") or not GENAI_FEATURES_ENABLED:
+            return
         try:
             memory_text = f"[{classification.severity}] {classification.service}: {classification.description} - {classification.likely_cause}"
-            response = genai.embed_content(
-                model="models/gemini-embedding-001",
-                content=memory_text,
-                task_type="RETRIEVAL_DOCUMENT"
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    genai.embed_content,
+                    model="models/gemini-embedding-001",
+                    content=memory_text,
+                    task_type="RETRIEVAL_DOCUMENT",
+                ),
+                timeout=EXTERNAL_CALL_TIMEOUT_SECONDS,
             )
             await store_incident_memory(
                 incident_id=classification.incident_id,
@@ -148,100 +243,157 @@ class IncidentOrchestrator:
     async def _post_to_chat(self, classification: IncidentClassification, similar_text: str) -> dict:
         """Post incident to Google Chat"""
         try:
-            # Import chat MCP tools dynamically
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("chat_mcp", os.path.join(ROOT_DIR, "agents", "chat_agent", "mcp_server.py"))
-            chat_mcp = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(chat_mcp)
-            
-            result = chat_mcp.post_incident_alert(
-                incident_id=classification.incident_id,
-                severity=classification.severity,
-                service=classification.service,
-                description=classification.description,
-                likely_cause=classification.likely_cause,
-                suggested_action=classification.suggested_action,
-                affected_users=classification.affected_users,
-                doc_link="",
-                meet_link="",
-                similar_incidents=similar_text or ""
-            )
-            log.info(f"[{self.session_id}] Posted to Google Chat: {result}")
-            return {"message_id": result.get("message_name", f"msg-{classification.incident_id}"), "success": result.get("success")}
+            async with self.chat_client:
+                result = await self.chat_client.call_tool(
+                    "post_incident_alert",
+                    {
+                        "incident_id": classification.incident_id,
+                        "severity": classification.severity,
+                        "service": classification.service,
+                        "description": classification.description,
+                        "likely_cause": classification.likely_cause,
+                        "suggested_action": classification.suggested_action,
+                        "affected_users": classification.affected_users,
+                        "region": classification.region,
+                        "doc_link": "",
+                        "meet_link": "",
+                        "similar_incidents": similar_text or "",
+                    },
+                    timeout=EXTERNAL_CALL_TIMEOUT_SECONDS,
+                )
+            payload = _result_to_dict(result)
+            log.info(f"[{self.session_id}] Posted to Google Chat via MCP: {payload}")
+            return {
+                "message_id": payload.get("message_name", f"msg-{classification.incident_id}"),
+                "success": payload.get("success", False),
+            }
         except Exception as e:
-            log.error(f"[{self.session_id}] ChatAgent failed: {e}")
+            log.error(f"[{self.session_id}] ChatAgent MCP call failed: {e}")
             return {"success": False, "error": str(e)}
 
     async def _post_meet_to_chat(self, classification: IncidentClassification, meet_url: str) -> dict:
         """Post Meet link to Google Chat"""
         try:
-            # Import chat MCP tools dynamically
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("chat_mcp", os.path.join(ROOT_DIR, "agents", "chat_agent", "mcp_server.py"))
-            chat_mcp = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(chat_mcp)
-            
             message = f"🔗 **WAR ROOM**: {meet_url}\n\nJoin the Google Meet to coordinate response for [{classification.severity}] {classification.service} incident."
-            result = chat_mcp.post_text_message(text=message)
-            log.info(f"[{self.session_id}] Posted Meet link to Chat: {result}")
-            return result
+            async with self.chat_client:
+                result = await self.chat_client.call_tool(
+                    "post_text_message",
+                    {"text": message},
+                    timeout=EXTERNAL_CALL_TIMEOUT_SECONDS,
+                )
+            payload = _result_to_dict(result)
+            log.info(f"[{self.session_id}] Posted Meet link to Chat via MCP: {payload}")
+            return payload
         except Exception as e:
-            log.error(f"[{self.session_id}] Failed to post Meet to Chat: {e}")
+            log.error(f"[{self.session_id}] Failed to post Meet to Chat via MCP: {e}")
             return {"success": False, "error": str(e)}
 
-    async def _create_doc(self, classification: IncidentClassification, similar_text: str) -> dict:
-        """Create incident document in Google Docs"""
+    async def _create_doc(self, classification: IncidentClassification, similar_text: str, alert: dict) -> dict:
+        """Create incident document in Google Docs with diagnostics.
+
+        Note: The INCIDENT ANALYSIS section is written separately in Phase 2 by the
+        ADK doc-analysis agent via the docs MCP `update_doc_section` tool. We pass
+        an empty `analysis` here so the doc is created fast on the critical path.
+        """
         try:
-            # Import docs MCP tools dynamically
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("docs_mcp", os.path.join(ROOT_DIR, "agents", "docs_agent", "mcp_server.py"))
-            docs_mcp = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(docs_mcp)
-            
-            result = docs_mcp.create_incident_doc(
-                incident_id=classification.incident_id,
-                severity=classification.severity,
-                service=classification.service,
-                description=classification.description,
-                likely_cause=classification.likely_cause,
-                suggested_action=classification.suggested_action,
-                affected_users=classification.affected_users
-            )
-            log.info(f"[{self.session_id}] Created doc: {result}")
-            return {"doc_url": result.get("doc_url", f"https://docs.google.com/document/d/{classification.incident_id}"), "success": result.get("success")}
+            analysis = ""
+
+            diagnostics = alert.get("diagnostics", {})
+            error_logs = "\n".join(diagnostics.get("last_logs", []))
+
+            async with self.docs_client:
+                result = await self.docs_client.call_tool(
+                    "create_incident_doc",
+                    {
+                        "incident_id": classification.incident_id,
+                        "severity": classification.severity,
+                        "service": classification.service,
+                        "description": classification.description,
+                        "likely_cause": classification.likely_cause,
+                        "suggested_action": classification.suggested_action,
+                        "affected_users": classification.affected_users,
+                        "region": classification.region,
+                        "error_rate": classification.error_rate,
+                        "latency_p99_ms": str(alert.get("latency_p99_ms", "N/A")),
+                        "requests_per_minute": str(alert.get("requests_per_minute", "N/A")),
+                        "deployment_id": classification.deployment_id,
+                        "deployment_age_minutes": str(diagnostics.get("deployment_age_minutes", "unknown")),
+                        "cpu_usage": diagnostics.get("cpu_usage", "N/A"),
+                        "memory_usage": diagnostics.get("memory_usage", "N/A"),
+                        "error_logs": error_logs,
+                        "similar_incidents": similar_text,
+                        "analysis": analysis,
+                    },
+                    timeout=EXTERNAL_CALL_TIMEOUT_SECONDS,
+                )
+            payload = _result_to_dict(result)
+            log.info(f"[{self.session_id}] Created doc via MCP: {payload}")
+            return {
+                "doc_url": payload.get("doc_url", f"https://docs.google.com/document/d/{classification.incident_id}"),
+                "success": payload.get("success", False),
+            }
         except Exception as e:
-            log.error(f"[{self.session_id}] DocsAgent failed: {e}")
+            log.error(f"[{self.session_id}] DocsAgent MCP call failed: {e}")
             return {"success": False, "error": str(e)}
 
     async def _block_calendar(self, classification: IncidentClassification) -> dict:
         """Block calendar and create Meet for P0 incident"""
         try:
-            # Import calendar MCP tools dynamically
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("calendar_mcp", os.path.join(ROOT_DIR, "agents", "calendar_agent", "mcp_server.py"))
-            calendar_mcp = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(calendar_mcp)
-            
-            # Block calendar
-            block_result = calendar_mcp.block_oncall_calendar(
-                incident_id=classification.incident_id,
-                service=classification.service,
-                severity=classification.severity,
-                duration_minutes=120
-            )
-            log.info(f"[{self.session_id}] Blocked calendar: {block_result}")
-            
-            # Create Meet link
-            meet_result = calendar_mcp.create_meet_link(
-                incident_id=classification.incident_id,
-                service=classification.service,
-                severity=classification.severity
-            )
-            log.info(f"[{self.session_id}] Created Meet: {meet_result}")
-            return {"meet_url": meet_result.get("meet_url", f"https://meet.google.com/lookup/{classification.incident_id}"), "success": meet_result.get("success")}
+            async with self.calendar_client:
+                block_result = await self.calendar_client.call_tool(
+                    "block_oncall_calendar",
+                    {
+                        "incident_id": classification.incident_id,
+                        "service": classification.service,
+                        "severity": classification.severity,
+                        "duration_minutes": 120,
+                    },
+                    timeout=EXTERNAL_CALL_TIMEOUT_SECONDS,
+                )
+                meet_result = await self.calendar_client.call_tool(
+                    "create_meet_link",
+                    {
+                        "incident_id": classification.incident_id,
+                        "service": classification.service,
+                        "severity": classification.severity,
+                    },
+                    timeout=EXTERNAL_CALL_TIMEOUT_SECONDS,
+                )
+            block_payload = _result_to_dict(block_result)
+            meet_payload = _result_to_dict(meet_result)
+            log.info(f"[{self.session_id}] Blocked calendar via MCP: {block_payload}")
+            log.info(f"[{self.session_id}] Created Meet via MCP: {meet_payload}")
+            return {
+                "meet_url": meet_payload.get("meet_url", f"https://meet.google.com/lookup/{classification.incident_id}"),
+                "success": meet_payload.get("success", False),
+            }
         except Exception as e:
-            log.error(f"[{self.session_id}] CalendarAgent failed: {e}")
+            log.error(f"[{self.session_id}] CalendarAgent MCP call failed: {e}")
             return {"success": False, "error": str(e)}
+
+
+def _extract_doc_id(doc_url: str | None) -> str | None:
+    """Extract Google Doc ID from a URL like https://docs.google.com/document/d/{ID}/edit"""
+    if not doc_url:
+        return None
+    try:
+        parts = doc_url.split("/d/")
+        if len(parts) >= 2:
+            return parts[1].split("/")[0]
+    except Exception:
+        pass
+    return None
+
+
+def _result_to_dict(result) -> dict:
+    if isinstance(getattr(result, "data", None), dict):
+        return result.data
+    if isinstance(getattr(result, "structured_content", None), dict):
+        return result.structured_content
+    return {
+        "success": not getattr(result, "is_error", True),
+        "content": getattr(result, "content", []),
+    }
 
 
 _orchestrator = IncidentOrchestrator()
