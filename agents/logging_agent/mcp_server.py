@@ -1,6 +1,7 @@
 from fastmcp import FastMCP
 import sys
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
@@ -98,6 +99,21 @@ def search_logs(service_name: str, query: str, minutes_back: int = 15) -> dict:
 
     Returns dict with 'entries' list, each entry has timestamp, severity, message, pod, container.
     """
+    minutes_back = max(1, minutes_back)
+
+    if not re.match(r'^[a-zA-Z0-9._-]+$', service_name or ""):
+        return {
+            "success": False,
+            "service_name": service_name,
+            "query": query,
+            "minutes_back": minutes_back,
+            "total_count": 0,
+            "time_range": {"start": "", "end": ""},
+            "entries": [],
+            "demo_mode": False,
+            "error": f"Invalid service_name '{service_name}': only alphanumerics, dots, hyphens, underscores allowed",
+        }
+
     now = datetime.now(timezone.utc)
     start_time = now - timedelta(minutes=minutes_back)
 
@@ -132,9 +148,10 @@ def search_logs(service_name: str, query: str, minutes_back: int = 15) -> dict:
 
         service = _get_logging_service()
 
+        start_rfc3339 = start_time.isoformat().replace("+00:00", "Z")
         filter_str = (
             f'resource.labels.container_name="{service_name}" '
-            f'AND timestamp>="{start_time.isoformat()}Z" '
+            f'AND timestamp>="{start_rfc3339}" '
             f'AND ({query})'
         )
 
