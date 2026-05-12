@@ -13,6 +13,7 @@ SERVER_URLS = {
     "docs-mcp": os.getenv("DOCS_MCP_URL", "http://127.0.0.1:8002/sse"),
     "calendar-mcp": os.getenv("CALENDAR_MCP_URL", "http://127.0.0.1:8003/sse"),
     "github-mcp": os.getenv("GITHUB_MCP_URL", "http://127.0.0.1:8004/sse"),
+    "logging-mcp": os.getenv("LOGGING_MCP_URL", "http://127.0.0.1:8005/sse"),
 }
 
 

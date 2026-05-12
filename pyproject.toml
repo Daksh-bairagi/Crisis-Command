@@ -34,5 +34,6 @@ packages = [
     "agents.docs_agent",
     "agents.calendar_agent",
     "agents.github_agent",
+    "agents.logging_agent",
 ]
 py-modules = ["config", "logger"]
