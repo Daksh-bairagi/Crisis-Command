@@ -1,40 +1,22 @@
 from fastmcp import FastMCP
-from googleapiclient.discovery import build
 import sys
-import os 
-from datetime import datetime
-from dotenv import load_dotenv
+import os
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT_DIR)
-from auth.oauth import get_credentials
+
+from agents.chat_agent import actions
 from logger import get_mcp_logger
-log= get_mcp_logger("chat_mcp_server")
-load_dotenv(os.path.join(ROOT_DIR, ".env"))
-mcp= FastMCP("chat-server")
 
-SPACE_ID = os.getenv("CHAT_SPACE_ID")
+log = get_mcp_logger("chat_mcp_server")
+mcp = FastMCP("chat-server")
 
-
-def get_service():
-    creds = get_credentials()
-    return build('chat', 'v1', credentials=creds)
 
 @mcp.tool()
 def post_text_message(text: str) -> dict:
     """Post a text message to the Google Chat space."""
-    try:
-        service = get_service()
-        result = service.spaces().messages().create(
-            parent=SPACE_ID,
-            body={"text": text}
-        ).execute()
-        log.info(f"Posted message to chat with id: {result['name']}")
-        return {"success": True, "message_name": result.get("name")}
-    except Exception as e:
-        log.error(f"Error posting message to chat: {e}")
-        return {"success": False, "error": str(e)}
-    
+    return actions.post_text_message(text)
+
 
 @mcp.tool()
 def post_incident_alert(
@@ -49,77 +31,26 @@ def post_incident_alert(
     doc_link: str = "",
     meet_link: str = "",
     similar_incidents: str = "",
-    similar_incident: str = ""
 ) -> dict:
     """
     Post a rich incident alert to Chat space.
     Formats all incident details clearly for the SRE team.
     Uses text-based format (no Cards) to avoid IIITG Gmail restrictions.
     """
-    try:
-        chat_service = get_service()
-        emoji = {"P0": "🔴", "P1": "🟡", "P2": "🟢"}.get(severity, "⚪")
-        detected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return actions.post_incident_alert(
+        incident_id=incident_id,
+        severity=severity,
+        service=service,
+        description=description,
+        likely_cause=likely_cause,
+        suggested_action=suggested_action,
+        affected_users=affected_users,
+        region=region,
+        doc_link=doc_link,
+        meet_link=meet_link,
+        similar_incidents=similar_incidents,
+    )
 
-        lines = [
-            f"{emoji} *{severity} INCIDENT — {incident_id}*",
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            f"",
-            f"*Service:* {service}",
-            f"*Region:* {region}",
-            f"*Detected:* {detected_at}",
-            f"",
-            f"*Description:*",
-            f"{description}",
-            f"",
-            f"*Affected Users:* {affected_users}",
-            f"",
-            f"*Root Cause Analysis:*",
-            f"{likely_cause}",
-            f"",
-            f"*Suggested Action:*",
-            f"{suggested_action}",
-        ]
-
-        if similar_incidents:
-            lines.append(f"")
-            lines.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            lines.append(f"⚡ *Similar Past Incidents Found:*")
-            lines.append(f"{similar_incidents}")
-
-        if doc_link:
-            lines.append(f"")
-            lines.append(f"📄 *Incident Document:*")
-            lines.append(f"{doc_link}")
-
-        if meet_link:
-            lines.append(f"")
-            lines.append(f"📹 *War Room (Google Meet):*")
-            lines.append(f"{meet_link}")
-
-        lines.append(f"")
-        lines.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append(f"*Actions:*")
-        lines.append(f"Reply: `acknowledge {incident_id}` to acknowledge")
-        lines.append(f"Reply: `resolve {incident_id}` to mark resolved")
-
-        message = "\n".join(lines)
-
-        result = chat_service.spaces().messages().create(
-            parent=SPACE_ID,
-            body={"text": message}
-        ).execute()
-
-        log.info("Incident alert posted: %s", result.get("name"))
-        return {
-            "success": True,
-            "message_name": result.get("name"),
-            "incident_id": incident_id
-        }
-
-    except Exception as e:
-        log.error("Failed to post alert: %s", str(e))
-        return {"success": False, "error": str(e)}
 
 @mcp.tool()
 def update_message(message_name: str, new_text: str) -> dict:
@@ -128,18 +59,7 @@ def update_message(message_name: str, new_text: str) -> dict:
     Use after acknowledge or resolve to reflect new status.
     message_name format: spaces/XXX/messages/YYY
     """
-    try:
-        service = get_service()
-        result = service.spaces().messages().update(
-            name=message_name,
-            updateMask="text",
-            body={"text": new_text}
-        ).execute()
-        log.info("Message updated: %s", message_name)
-        return {"success": True, "message_name": result.get("name")}
-    except Exception as e:
-        log.error("Failed to update message: %s", str(e))
-        return {"success": False, "error": str(e)}
+    return actions.update_message(message_name, new_text)
 
 
 @mcp.tool()
@@ -147,24 +67,9 @@ def post_status_update(incident_id: str, status: str, actor: str = "System") -> 
     """
     Post a quick status update after acknowledge/resolve.
     """
-    try:
-        service = get_service()
-        status_emoji = {"acknowledged": "✅", "resolved": "🎉"}.get(status, "ℹ️")
-        
-        message = f"{status_emoji} *Incident {incident_id} {status}* by {actor}"
-        
-        result = service.spaces().messages().create(
-            parent=SPACE_ID,
-            body={"text": message}
-        ).execute()
-        
-        log.info(f"Status update posted: {incident_id} - {status}")
-        return {"success": True, "message_name": result.get("name")}
-    except Exception as e:
-        log.error(f"Failed to post status update: {e}")
-        return {"success": False, "error": str(e)}
+    return actions.post_status_update(incident_id, status, actor)
 
 
 if __name__ == "__main__":
-    log.info("Starting Chat MCP server on stdio transport")
+    log.info("chat MCP server starting on stdio transport")
     mcp.run()

@@ -10,14 +10,12 @@ CREDENTIALS_PATH = os.path.join(ROOT_DIR, 'credentials.json')
 # These are the exact permission scopes we need — nothing more
 # Principle of least privilege: only ask for what you actually use
 SCOPES = [
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.compose',
     'https://www.googleapis.com/auth/calendar',
-    'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/chat.messages',
     'https://www.googleapis.com/auth/chat.messages.create',
     'https://www.googleapis.com/auth/documents',
     'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/logging.read',
 ]
 
 def get_credentials() -> Credentials:

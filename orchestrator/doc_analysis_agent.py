@@ -30,6 +30,8 @@ from google.genai.types import Content, Part
 from database.db import search_similar_incidents
 from orchestrator.mcp_clients import create_mcp_client
 from logger import get_logger
+from agents.chat_agent import actions as chat_actions
+from agents.docs_agent import actions as docs_actions
 
 log = get_logger("doc_analysis_agent")
 
@@ -226,15 +228,7 @@ def post_chat_message(text: str) -> dict:
     if not EXTERNAL_ACTIONS_ENABLED:
         return {"success": False, "error": "external actions disabled"}
     try:
-        _run_async(
-            _call_mcp_tool(
-                "agents/chat_agent/mcp_server.py",
-                "chat-mcp",
-                "post_text_message",
-                {"text": text},
-            )
-        )
-        return {"success": True}
+        return chat_actions.post_text_message(text)
     except Exception as e:
         log.warning("post_chat_message tool failed: %s", e)
         return {"success": False, "error": str(e)}
@@ -253,19 +247,7 @@ def update_doc_analysis(doc_id: str, content: str) -> dict:
     if not EXTERNAL_ACTIONS_ENABLED:
         return {"success": False, "error": "external actions disabled"}
     try:
-        _run_async(
-            _call_mcp_tool(
-                "agents/docs_agent/mcp_server.py",
-                "docs-mcp",
-                "update_doc_section",
-                {
-                    "doc_id": doc_id,
-                    "section_name": "INCIDENT ANALYSIS",
-                    "content": content,
-                },
-            )
-        )
-        return {"success": True}
+        return docs_actions.update_doc_section(doc_id, "INCIDENT ANALYSIS", content)
     except Exception as e:
         log.warning("update_doc_analysis tool failed: %s", e)
         return {"success": False, "error": str(e)}

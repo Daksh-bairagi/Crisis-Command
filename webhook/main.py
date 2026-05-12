@@ -200,11 +200,6 @@ async def handle_card_click(body:dict, background_tasks: BackgroundTasks)->JSONR
         p["key"]:p["value"]
         for p in action.get("parameters",[])
     }
-    """
-    {"key": "incident_id", "value": "INC123"} 
-    to 
-    "incident_id": "INC123"
-    """
     incident_id= parameter.get("incident_id","unknown")
     actor= body.get("user",{}).get("displayName","Unknown")
 
@@ -376,54 +371,6 @@ async def _reembed_incident_memory(incident_id: str, resolution_notes: str):
 
 
 
-
-"""
-verify_chat_request()
-└── Checks if request came from Google Chat (Bearer token check)
-
-verify_simulator_request()  
-└── Checks if request came from our simulator (secret key check)
-
-webhook_handler()           ← THE FRONT DOOR
-└── Receives ALL incoming POST requests
-    Reads event type → routes to correct handler
-    Monitoring alerts → background task (don't wait)
-    Chat events → immediate response
-
-handle_chat_event()
-└── Sub-router for Chat specifically
-    ADDED_TO_SPACE → greet the space
-    MESSAGE → handle_chat_message()
-    CARD_CLICKED → handle_card_click()
-
-handle_chat_message()
-└── Handles text commands typed to the bot
-    "help", "status" → returns text response
-
-handle_card_click()
-└── Handles button clicks on incident cards
-    "acknowledge" / "resolve" → updates incident
-    Carries incident_id so we know which incident
-
-handle_monitoring_alert()
-└── Background task — processes the actual alert
-    Runs AFTER webhook already returned 200
-    Day 2: this calls the orchestrator
-
-health()
-└── GET /health — just returns "ok"
-    Cloud Run uses this to check service is alive
-
-------------------------------------------------------------------
-------------------------------------------------------------------
-Simulator POST → webhook_handler → handle_monitoring_alert (background)
-                                          ↓
-                               orchestrator goes here Day 2
-
-Chat button click → webhook_handler → handle_card_click → acknowledge/resolve
-
-
-"""
 
 if __name__ == "__main__":
     import uvicorn

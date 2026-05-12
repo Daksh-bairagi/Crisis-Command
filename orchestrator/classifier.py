@@ -1,7 +1,5 @@
 from dataclasses import dataclass
-# dataclass is a decorator that automatically generates special methods like __init__() and __repr__() for classes. It is used to create classes that are primarily used to store data.
 from typing import Optional
-# optional is for either string or none
 import asyncio
 import sys
 import os
@@ -26,7 +24,7 @@ LLM_CLASSIFIER_ENABLED = (
 )
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel("gemini-3-flash-preview")
+    model = genai.GenerativeModel("gemini-2.0-flash")
 else:
     model = None
     log.warning("GOOGLE_API_KEY is not configured. Using heuristic classifier fallback.")

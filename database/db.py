@@ -45,10 +45,6 @@ def _get_session_local():
         )
     return _AsyncSessionLocal
 
-# Backward compatibility - reference these functions instead of module-level vars
-engine = None
-AsyncSessionLocal = None
-
 # ─── INCIDENT OPERATIONS ────────────────────────────────────────────────────
 
 async def store_incident(classification) -> bool:

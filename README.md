@@ -7,7 +7,7 @@ The repo is structured so the webhook can run safely on a laptop with external s
 ## What It Does
 
 - Accepts monitoring alerts over HTTP.
-- Classifies incidents as `P0`, `P1`, or `P2`.
+- Classifies incidents as `P0`, `P1`, or `P2` — structured alerts (numeric `error_rate` + `affected_users`) use a deterministic heuristic; unstructured text alerts fall through to the Gemini LLM classifier.
 - Stores incidents and vector memory in PostgreSQL.
 - Searches similar past incidents with Gemini embeddings plus pgvector.
 - Dispatches Chat, Docs, and Calendar actions concurrently through MCP.
@@ -23,18 +23,33 @@ simulator/fire_incident.py
           |
           v
 orchestrator/agent.py
-  |      |       |
-  |      |       +--> database/db.py
+  |      |      |      |
+  |      |      |      +--> orchestrator/classifier.py
+  |      |      |
+  |      |      +--> database/db.py
   |      |
-  |      +--> orchestrator/classifier.py
+  |      +--> orchestrator/mcp_clients.py
+  |                 |
+  |                 +--> agents/chat_agent/mcp_server.py
+  |                 +--> agents/docs_agent/mcp_server.py
+  |                 +--> agents/calendar_agent/mcp_server.py
   |
-  +--> orchestrator/mcp_clients.py
-           |
-           +--> agents/chat_agent/mcp_server.py
-           +--> agents/docs_agent/mcp_server.py
-           +--> agents/calendar_agent/mcp_server.py
-           +--> agents/github_agent/mcp_server.py
-           +--> agents/logging_agent/mcp_server.py
+  +--> orchestrator/doc_analysis_agent.py   (Phase 2 — fire-and-forget)
+             |
+             +--> orchestrator/mcp_clients.py
+                       |
+                       +--> agents/github_agent/mcp_server.py
+                       +--> agents/logging_agent/mcp_server.py
+                       +--> agents/docs_agent/mcp_server.py
+                       +--> agents/chat_agent/mcp_server.py
+             |
+             +--> database/db.py   (RAG search)
+
+webhook/main.py ──resolve event──> orchestrator/post_mortem.py
+                                         |
+                                         +--> orchestrator/mcp_clients.py
+                                                   |
+                                                   +--> agents/docs_agent/mcp_server.py
 ```
 
 ## Project Layout
@@ -42,7 +57,7 @@ orchestrator/agent.py
 ```text
 auth/            OAuth helper for Google APIs
 database/        Schema, DB access, and seed data
-orchestrator/    Classification, orchestration, MCP client wiring, ADK analysis
+orchestrator/    Classification, orchestration, MCP client wiring, ADK analysis, post-mortem generation
 agents/          MCP servers for Chat, Docs, Calendar, GitHub, and Logging
 simulator/       Demo alert generator
 ui/              Static dashboard served by FastAPI
@@ -163,6 +178,8 @@ See `.env.example` for the full list. The most important ones are:
 - `GITHUB_REPO`
 - `GOOGLE_CLOUD_PROJECT`
 - `MCP_TRANSPORT`
+- `EXTERNAL_CALL_TIMEOUT_SECONDS` (default `8`) — per-call timeout for MCP and embedding calls
+- `CLASSIFIER_TIMEOUT_SECONDS` (default `8`) — timeout for the Gemini classifier call
 
 ## Deployment
 
