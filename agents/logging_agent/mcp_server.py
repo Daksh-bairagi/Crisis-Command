@@ -39,23 +39,27 @@ def _demo_entries(service_name: str, minutes_back: int) -> list[dict]:
     now = datetime.now(timezone.utc)
     container = service_name if service_name else "payments-service"
 
+    pod1 = f"{service_name}-pod-1"
+    pod2 = f"{service_name}-pod-2"
+    pod3 = f"{service_name}-pod-3"
+
     # Each tuple: (minutes_ago, severity, message, pod)
     _raw = [
-        (1,  "ERROR",   "DB connection timeout after 30s — pool exhausted (active=10/10)", "payments-pod-1"),
-        (1,  "ERROR",   "DB connection timeout after 30s — pool exhausted (active=10/10)", "payments-pod-2"),
-        (2,  "ERROR",   "DB connection timeout after 30s — pool exhausted (active=10/10)", "payments-pod-3"),
-        (2,  "WARNING", "Circuit breaker OPEN for db-primary — consecutive failures: 5",    "payments-pod-1"),
-        (3,  "WARNING", "Circuit breaker OPEN for db-primary — consecutive failures: 5",    "payments-pod-2"),
-        (3,  "ERROR",   "Failed to acquire DB connection from pool within 30s",              "payments-pod-3"),
-        (4,  "WARNING", "Circuit breaker OPEN for db-primary — consecutive failures: 5",    "payments-pod-3"),
-        (5,  "ERROR",   "DB pool saturation: all 10 connections active, 47 requests queued", "payments-pod-1"),
-        (5,  "ERROR",   "DB pool saturation: all 10 connections active, 38 requests queued", "payments-pod-2"),
-        (6,  "WARNING", "DB pool high-water mark reached (active=9/10) — latency degrading", "payments-pod-1"),
-        (6,  "WARNING", "DB pool high-water mark reached (active=9/10) — latency degrading", "payments-pod-3"),
-        (7,  "ERROR",   "Slow query detected: SELECT * FROM payment_transactions took 12.4s", "payments-pod-2"),
-        (8,  "WARNING", "DB pool connections: active=8/10 — approaching limit post deploy-447", "payments-pod-1"),
-        (9,  "INFO",    "Deployment deploy-447 applied — DB_POOL_SIZE changed 50→10",         "payments-pod-1"),
-        (10, "INFO",    "Service startup complete — DB pool initialized with max_size=10",     "payments-pod-1"),
+        (1,  "ERROR",    "DB connection timeout after 30s — pool exhausted (active=10/10)",     pod1),
+        (1,  "ERROR",    "DB connection timeout after 30s — pool exhausted (active=10/10)",     pod2),
+        (2,  "CRITICAL", "Circuit breaker OPENED — failure rate 94% exceeds threshold 50%",     pod1),
+        (2,  "ERROR",    "DB connection timeout after 30s — pool exhausted (active=10/10)",     pod3),
+        (3,  "CRITICAL", "Circuit breaker OPENED — failure rate 94% exceeds threshold 50%",     pod2),
+        (3,  "ERROR",    "Failed to acquire DB connection from pool within 30s",                 pod3),
+        (4,  "CRITICAL", "Circuit breaker OPENED — failure rate 94% exceeds threshold 50%",     pod3),
+        (5,  "ERROR",    "DB pool saturation: all 10 connections active, 47 requests queued",   pod1),
+        (5,  "ERROR",    "DB pool saturation: all 10 connections active, 38 requests queued",   pod2),
+        (6,  "WARNING",  "DB pool high-water mark reached (active=9/10) — latency degrading",   pod1),
+        (6,  "WARNING",  "DB pool high-water mark reached (active=9/10) — latency degrading",   pod3),
+        (7,  "ERROR",    "Slow query detected: SELECT * FROM payment_transactions took 12.4s",  pod2),
+        (8,  "WARNING",  "DB pool connections: active=8/10 — approaching limit post deploy-447", pod1),
+        (9,  "INFO",     "Deployment deploy-447 applied — DB_POOL_SIZE changed 50→10",          pod1),
+        (10, "INFO",     "Service startup complete — DB pool initialized with max_size=10",      pod1),
     ]
 
     entries = []
@@ -81,48 +85,18 @@ def _demo_entries(service_name: str, minutes_back: int) -> list[dict]:
 @mcp.tool()
 def search_logs(service_name: str, query: str, minutes_back: int = 15) -> dict:
     """
-    Search Google Cloud Logging for log entries from a specific service.
-
-    Call this tool when you need the FULL log picture for a service involved in an
-    incident — not just the 3 alert lines, but the last N minutes of entries with
-    proper timestamps, severity levels, and pod/instance context. Use it to answer:
-    - Is the error isolated to one pod or all pods?
-    - Did errors start before or after a specific deployment?
-    - How frequently are timeouts/errors occurring?
-    - Is a circuit breaker open?
-
-    Query format: plain text search terms or Cloud Logging filter syntax, e.g.
-        "timeout OR pool exhausted"
-        "severity=ERROR"
-        "DB connection"
-        "circuit breaker"
+    Search application logs in Google Cloud Logging for a service.
+    Use this to get full log context beyond the 3 lines in the alert.
+    Call this when you need to understand error frequency, which pods are affected,
+    or whether an issue started before or after a deployment.
 
     Args:
-        service_name: Container/service name to filter logs for (e.g., 'payments-service').
-        query:        Search string or Cloud Logging filter expression to narrow results.
-        minutes_back: How far back to search in minutes (default 15).
+        service_name: The service to search logs for (e.g. 'payments-service')
+        query: Log filter query — use error keywords from the alert
+               (e.g. 'timeout OR pool OR "circuit breaker"')
+        minutes_back: How many minutes of logs to retrieve (default 15)
 
-    Returns:
-        {
-            "success": bool,
-            "service_name": str,
-            "query": str,
-            "minutes_back": int,
-            "total_count": int,
-            "time_range": {"start": str (ISO 8601), "end": str (ISO 8601)},
-            "entries": [
-                {
-                    "timestamp": str (ISO 8601),
-                    "severity": str,   # ERROR, WARNING, INFO, CRITICAL, DEFAULT
-                    "message": str,
-                    "pod": str,
-                    "container": str
-                },
-                ...
-            ],
-            "demo_mode": bool   # True when running without real GCP credentials
-        }
-        On failure: {"success": False, "error": str}
+    Returns dict with 'entries' list, each entry has timestamp, severity, message, pod, container.
     """
     now = datetime.now(timezone.utc)
     start_time = now - timedelta(minutes=minutes_back)
@@ -212,7 +186,17 @@ def search_logs(service_name: str, query: str, minutes_back: int = 15) -> dict:
 
     except Exception as e:
         log.error("Error searching Cloud Logging for service '%s': %s", service_name, e)
-        return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "service_name": service_name,
+            "query": query,
+            "minutes_back": minutes_back,
+            "total_count": 0,
+            "time_range": {"start": start_time.isoformat(), "end": now.isoformat()},
+            "entries": [],
+            "demo_mode": False,
+            "error": str(e),
+        }
 
 
 log.info(
