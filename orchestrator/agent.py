@@ -45,6 +45,10 @@ EXTERNAL_ACTIONS_ENABLED = _env_flag("ENABLE_EXTERNAL_ACTIONS", bool(os.getenv("
 GENAI_FEATURES_ENABLED = _env_flag("ENABLE_GENAI_FEATURES", bool(os.getenv("K_SERVICE")))
 DATABASE_ENABLED = _env_flag("ENABLE_DATABASE", bool(os.getenv("K_SERVICE")))
 
+# Strong references to fire-and-forget background tasks so they are not GC'd mid-flight.
+# Standard pattern from Python asyncio docs.
+_background_tasks: set[asyncio.Task] = set()
+
 
 # ─── MAIN ORCHESTRATOR AGENT ────────────────────────────────────
 
@@ -172,9 +176,11 @@ class IncidentOrchestrator:
                     f"[{self.session_id}] Phase 2: dispatching ADK incident analysis "
                     f"(doc_id={doc_id or 'none'})"
                 )
-                asyncio.create_task(
+                _task = asyncio.create_task(
                     generate_doc_analysis(alert, classification, doc_id=doc_id)
                 )
+                _background_tasks.add(_task)
+                _task.add_done_callback(_background_tasks.discard)
 
             # Log trace
             if DATABASE_ENABLED:

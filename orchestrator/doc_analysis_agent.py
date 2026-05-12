@@ -123,9 +123,11 @@ def _result_to_dict(result) -> dict:
 def _run_async(coro):
     """Run an async coroutine from a sync ADK tool function.
 
-    ADK tool functions are synchronous, but they execute inside an already-running
-    event loop (the runner's loop). asyncio.run() refuses to nest, so we use the
-    current loop's run_until_complete via a fresh loop bound to a worker thread.
+    ADK tool functions are synchronous but execute on the same thread as the
+    running ADK event loop. asyncio.run() refuses to nest loops on the same
+    thread, so we create a brand-new event loop, run it to completion, then
+    close it. Both loops run serially on the calling thread — no new thread is
+    created.
     """
     try:
         loop = asyncio.new_event_loop()
@@ -155,6 +157,7 @@ def search_past_incidents(query: str) -> dict:
     try:
         return _run_async(_rag_search(query))
     except Exception as e:
+        log.warning("search_past_incidents tool failed: %s", e)
         return {"incidents": [], "count": 0, "error": str(e)}
 
 
@@ -180,6 +183,7 @@ def get_deployment_info(deployment_id: str) -> dict:
             )
         )
     except Exception as e:
+        log.warning("get_deployment_info tool failed: %s", e)
         return {"success": False, "error": str(e)}
 
 
@@ -206,6 +210,7 @@ def search_recent_logs(service_name: str, query: str) -> dict:
             )
         )
     except Exception as e:
+        log.warning("search_recent_logs tool failed: %s", e)
         return {"success": False, "error": str(e)}
 
 
@@ -231,6 +236,7 @@ def post_chat_message(text: str) -> dict:
         )
         return {"success": True}
     except Exception as e:
+        log.warning("post_chat_message tool failed: %s", e)
         return {"success": False, "error": str(e)}
 
 
@@ -261,6 +267,7 @@ def update_doc_analysis(doc_id: str, content: str) -> dict:
         )
         return {"success": True}
     except Exception as e:
+        log.warning("update_doc_analysis tool failed: %s", e)
         return {"success": False, "error": str(e)}
 
 
@@ -310,6 +317,7 @@ async def generate_doc_analysis(alert: dict, classification, doc_id: str = None)
         logs_text = "\n".join(f"  {line}" for line in logs) if logs else "  (no log data provided)"
         dep_age = diagnostics.get("deployment_age_minutes")
         dep_label = f"{dep_age} minutes before incident" if dep_age is not None else "age unknown"
+        # "" is treated as absent and falls through to diagnostics — intentional
         deployment_id = getattr(classification, "deployment_id", None) or diagnostics.get("last_deployment", "unknown")
 
         doc_id_line = f"doc_id: {doc_id}" if doc_id else "doc_id: (none — skip update_doc_analysis)"
