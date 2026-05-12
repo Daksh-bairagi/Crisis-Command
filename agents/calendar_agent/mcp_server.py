@@ -9,10 +9,10 @@ from dotenv import load_dotenv
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT_DIR)
 
-from logger import get_logger
+from logger import get_mcp_logger
 from auth.oauth import get_credentials
 
-log = get_logger("calendar_mcp_server")
+log = get_mcp_logger("calendar_mcp_server")
 load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
 mcp = FastMCP("calendar-server")

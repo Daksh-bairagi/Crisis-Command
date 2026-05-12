@@ -36,6 +36,7 @@ service_account.json
 # Logs
 *.log
 logs/
+.mcp-logs/
 
 # Database
 *.db
@@ -59,3 +60,4 @@ npm-debug.log
 *.bak
 *.backup
 *.tmp
+.tmp/

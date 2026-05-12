@@ -14,14 +14,30 @@ from logger import get_logger
 # Optional database imports - app works without database
 try:
     from orchestrator.agent import process_incident_alert
-    from database.db import update_incident_status, store_incident, log_trace
+    from orchestrator.post_mortem import generate_post_mortem
+    from database.db import (
+        update_incident_status,
+        update_incident_resolution,
+        store_incident,
+        log_trace,
+        get_recent_incidents,
+        get_incident,
+        store_incident_memory,
+        search_similar_incidents,
+    )
     DB_AVAILABLE = True
 except Exception as e:
     log_msg = f"Database not available: {str(e)}"
     process_incident_alert = None
+    generate_post_mortem = None
     update_incident_status = None
+    update_incident_resolution = None
     store_incident = None
     log_trace = None
+    get_recent_incidents = None
+    get_incident = None
+    store_incident_memory = None
+    search_similar_incidents = None
     DB_AVAILABLE = False
 
 log= get_logger("webhook")
@@ -124,34 +140,50 @@ async def handle_chat_event(
         })
 
     elif event_type == "MESSAGE":
-        return await handle_chat_message(body)
+        return await handle_chat_message(body, background_tasks)
 
     elif event_type == "CARD_CLICKED":
         return await handle_card_click(body, background_tasks)
 
     return JSONResponse({"status": "unhandled"})
 
-async def handle_chat_message(body:dict)->JSONResponse:
+async def handle_chat_message(body: dict, background_tasks: BackgroundTasks) -> JSONResponse:
     """Handles text messages sent to the bot"""
-    text= body.get("message",{}).get("text","").strip().lower()
-    sender= body.get("message",{}).get("sender",{}).get("displayName","Unknown")
-    log.info(f"Received message from {sender}: {text}")
+    raw_text = body.get("message", {}).get("text", "").strip()
+    text_lower = raw_text.lower()
+    sender = body.get("message", {}).get("sender", {}).get("displayName", "Unknown")
+    log.info("Received message from %s: %s", sender, raw_text)
 
-    if "help" in text:
+    # resolution INC-XXXXXXXX <what was done>
+    if text_lower.startswith("resolution "):
+        parts = raw_text.split(" ", 2)
+        if len(parts) < 3:
+            return JSONResponse({"text": "Usage: `resolution INC-XXXXXXXX <what you did to fix it>`"})
+        incident_id = parts[1].upper()
+        notes = parts[2].strip()
+        if not notes:
+            return JSONResponse({"text": "Please include what you did to resolve the incident."})
+        if DB_AVAILABLE and update_incident_resolution is not None:
+            saved = await update_incident_resolution(incident_id, notes)
+            if saved:
+                background_tasks.add_task(_reembed_incident_memory, incident_id, notes)
+                return JSONResponse({
+                    "text": f"✅ Resolution notes saved for {incident_id}. Incident memory updated for future reference."
+                })
+        return JSONResponse({"text": f"❌ Could not save resolution notes for {incident_id}."})
+
+    if "help" in text_lower:
         return JSONResponse({"text": (
             "📖 *CrisisCommand Commands*\n"
             "`status` — system health\n"
             "`incidents` — list active incidents\n"
+            "`resolution INC-XXXXXXXX <what you did>` — record how you resolved an incident\n"
             "Incidents are triggered automatically via monitoring webhooks."
         )})
-    elif "status" in text:
-        return JSONResponse({
-            "text": "✅ CrisisCommand operational. Monitoring active."
-        })
+    elif "status" in text_lower:
+        return JSONResponse({"text": "✅ CrisisCommand operational. Monitoring active."})
     else:
-        return JSONResponse({
-            "text": "❓ Sorry, I didn't understand that. Type `help` for commands."
-        })
+        return JSONResponse({"text": "❓ Sorry, I didn't understand that. Type `help` for commands."})
     
 
 async def handle_card_click(body:dict, background_tasks: BackgroundTasks)->JSONResponse:
@@ -178,19 +210,19 @@ async def handle_card_click(body:dict, background_tasks: BackgroundTasks)->JSONR
 
     log.info(f"Button clicked: {action_name} on incident {incident_id} by {actor}") 
 
-    if action_name== "acknowledge":
-        # Update AlloyDB record to acknowledged
-        asyncio.create_task(update_incident_status(incident_id, "acknowledged", actor))
+    if action_name == "acknowledge":
+        background_tasks.add_task(update_incident_status, incident_id, "acknowledged")
         log.info(f"Incident {incident_id} acknowledged by {actor}")
         return JSONResponse(
-            {"text":f"Incidnent {incident_id} acknowledged. Thank you, {actor}!"}
+            {"text": f"Incident {incident_id} acknowledged. Thank you, {actor}!"}
         )
-    elif action_name== "resolve":
-        # Update AlloyDB record to resolved
-        asyncio.create_task(update_incident_status(incident_id, "resolved", actor))
+    elif action_name == "resolve":
+        background_tasks.add_task(update_incident_status, incident_id, "resolved")
+        if generate_post_mortem is not None:
+            background_tasks.add_task(generate_post_mortem, incident_id)
         log.info(f"Incident {incident_id} resolved by {actor}")
         return JSONResponse(
-            {"text":f"Incidnent {incident_id} resolved. Great work, {actor}!"}
+            {"text": f"Incident {incident_id} resolved. Great work, {actor}! Generating post-mortem..."}
         )
     else:
         log.warning(f"Unknown action: {action_name}")
@@ -246,24 +278,97 @@ async def health():
 
 @app.get("/incidents")
 async def get_incidents():
-    """Get list of recent incidents for the dashboard"""
-    # Return mock incidents since DB is not available
-    return {
-        "incidents": [
-            {
-                "incident_id": "DEMO-001",
-                "service": "demo-service",
-                "severity": "P0",
-                "status": "active",
-                "description": "Ready to receive incidents",
-                "affected_users": 0,
-                "error_rate": 0,
-                "detected_at": "2026-04-08T05:30:00Z",
-                "likely_cause": "Waiting for incidents",
-                "suggested_action": "Ready to respond"
-            }
-        ]
-    }
+    """Get list of recent incidents for the dashboard."""
+    if get_recent_incidents is not None:
+        try:
+            incidents = await get_recent_incidents(limit=20)
+            return {"incidents": incidents}
+        except Exception as e:
+            log.warning("Could not fetch incidents from DB: %s", e)
+    return {"incidents": []}
+
+
+@app.post("/incidents/{incident_id}/resolution")
+async def add_resolution(incident_id: str, request: Request, background_tasks: BackgroundTasks):
+    """
+    Record what the engineer actually did to resolve the incident.
+
+    Body: {"notes": "rolled back deploy-447, increased DB pool from 10 to 50", "actor": "Jane"}
+
+    This does two things:
+    1. Stores resolution_notes on the incident record.
+    2. Re-embeds the incident memory so future RAG queries surface
+       the resolution alongside the problem description.
+    """
+    body = await request.json()
+    notes = body.get("notes", "").strip()
+    actor = body.get("actor", "System")
+
+    if not notes:
+        raise HTTPException(status_code=400, detail="'notes' field is required")
+    if not DB_AVAILABLE or update_incident_resolution is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    saved = await update_incident_resolution(incident_id, notes)
+    if not saved:
+        raise HTTPException(status_code=500, detail="Failed to save resolution notes")
+
+    log.info("Resolution notes added to %s by %s", incident_id, actor)
+    background_tasks.add_task(_reembed_incident_memory, incident_id, notes)
+
+    return {"status": "ok", "incident_id": incident_id, "message": "Resolution notes saved. Memory will be updated."}
+
+
+async def _reembed_incident_memory(incident_id: str, resolution_notes: str):
+    """
+    Re-embed the incident memory entry with the resolution included.
+    Future RAG searches will return both the problem AND how it was resolved.
+    """
+    try:
+        import os
+        import google.generativeai as genai
+
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key or store_incident_memory is None or get_incident is None:
+            return
+
+        incident = await get_incident(incident_id)
+        if not incident:
+            log.warning("_reembed_incident_memory: incident %s not found", incident_id)
+            return
+
+        mttr = incident.get("mttr_seconds") or 0
+        mttr_label = f"{mttr // 60}m {mttr % 60}s" if mttr else "unknown"
+
+        # Build enriched content that includes the actual resolution
+        content = (
+            f"[{incident['severity']}] {incident['service']}: {incident['description']} "
+            f"— {incident['likely_cause']}. "
+            f"RESOLUTION APPLIED: {resolution_notes}. "
+            f"MTTR: {mttr_label}."
+        )
+
+        genai.configure(api_key=api_key)
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                genai.embed_content,
+                model="models/gemini-embedding-001",
+                content=content,
+                task_type="RETRIEVAL_DOCUMENT",
+            ),
+            timeout=10.0,
+        )
+
+        await store_incident_memory(
+            incident_id=incident_id,
+            content=content,
+            embedding=response["embedding"],
+            source="resolution",
+        )
+        log.info("Re-embedded incident memory for %s with resolution context", incident_id)
+
+    except Exception as e:
+        log.error("Failed to re-embed memory for %s: %s", incident_id, e)
 
 
 

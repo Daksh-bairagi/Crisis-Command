@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS incidents (
     detected_at TIMESTAMPTZ DEFAULT NOW(),
     acknowledged_at TIMESTAMPTZ,
     resolved_at TIMESTAMPTZ,
-    mttr_seconds INTEGER                  -- calculated on resolve
+    mttr_seconds INTEGER,                 -- calculated on resolve
+    resolution_notes TEXT                 -- what the engineer actually did to fix it
 );
 
 -- Vector memory for RAG

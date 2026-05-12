@@ -92,8 +92,11 @@ async def fire(scenario: str = "p0_payments"):
 
     incident = INCIDENTS[scenario]
     log.info("🚀 Firing incident scenario: %s", scenario)
-    log.info("Service: %s | Severity: %s", 
-             incident["alert"]["service"])
+    log.info(
+        "Service: %s | Severity hint: %s",
+        incident["alert"]["service"],
+        scenario,
+    )
             
     async with httpx.AsyncClient() as client:
         try:

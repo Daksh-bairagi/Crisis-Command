@@ -157,6 +157,28 @@ async def update_incident_status(
         return False
 
 
+async def update_incident_resolution(incident_id: str, notes: str) -> bool:
+    """
+    Store what the engineer actually did to resolve the incident.
+    Called after an engineer submits resolution notes via Chat or API.
+    The orchestrator separately re-embeds the incident memory to include this resolution
+    so future RAG queries surface the fix alongside the problem.
+    """
+    try:
+        async with _get_session_local()() as session:
+            await session.execute(text("""
+                UPDATE incidents
+                SET resolution_notes = :notes
+                WHERE id = :id
+            """), {"notes": notes, "id": incident_id})
+            await session.commit()
+            log.info("Resolution notes stored for %s", incident_id)
+            return True
+    except Exception as e:
+        log.error("Failed to store resolution notes for %s: %s", incident_id, e)
+        return False
+
+
 async def get_incident(incident_id: str) -> Optional[dict]:
     """Fetch full incident record"""
     try:
@@ -165,7 +187,7 @@ async def get_incident(incident_id: str) -> Optional[dict]:
                 SELECT id, service, severity, description, likely_cause,
                        suggested_action, affected_users, status,
                        detected_at, acknowledged_at, resolved_at, mttr_seconds,
-                       chat_message_name, doc_url, meet_url
+                       chat_message_name, doc_url, meet_url, resolution_notes
                 FROM incidents WHERE id = :id
             """), {"id": incident_id})
             row = result.fetchone()
@@ -179,11 +201,45 @@ async def get_incident(incident_id: str) -> Optional[dict]:
                 "detected_at": str(row[8]), "acknowledged_at": str(row[9]),
                 "resolved_at": str(row[10]), "mttr_seconds": row[11],
                 "chat_message_name": row[12], "doc_url": row[13],
-                "meet_url": row[14]
+                "meet_url": row[14], "resolution_notes": row[15],
             }
     except Exception as e:
         log.error("Failed to get incident: %s", str(e))
         return None
+
+
+async def get_recent_incidents(limit: int = 20) -> list[dict]:
+    """Fetch recent incidents for the dashboard, newest first."""
+    try:
+        async with _get_session_local()() as session:
+            result = await session.execute(text("""
+                SELECT id, service, severity, description, likely_cause,
+                       suggested_action, affected_users, status,
+                       detected_at, acknowledged_at, resolved_at, mttr_seconds,
+                       region, error_rate
+                FROM incidents
+                ORDER BY detected_at DESC
+                LIMIT :limit
+            """), {"limit": limit})
+            rows = result.fetchall()
+            return [
+                {
+                    "incident_id": row[0], "service": row[1],
+                    "severity": row[2], "description": row[3],
+                    "likely_cause": row[4], "suggested_action": row[5],
+                    "affected_users": row[6], "status": row[7],
+                    "detected_at": str(row[8]),
+                    "acknowledged_at": str(row[9]) if row[9] else None,
+                    "resolved_at": str(row[10]) if row[10] else None,
+                    "mttr_seconds": row[11],
+                    "region": row[12],
+                    "error_rate": str(row[13]) if row[13] is not None else "0",
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        log.error("Failed to get recent incidents: %s", str(e))
+        return []
 
 
 # ─── VECTOR MEMORY OPERATIONS ────────────────────────────────────────────────

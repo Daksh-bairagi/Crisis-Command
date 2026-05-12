@@ -8,10 +8,10 @@ from dotenv import load_dotenv
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT_DIR)
 
-from logger import get_logger
+from logger import get_mcp_logger
 from auth.oauth import get_credentials
 
-log = get_logger("docs_mcp_server")
+log = get_mcp_logger("docs_mcp_server")
 load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
 mcp = FastMCP("docs-server")
@@ -40,11 +40,21 @@ def create_incident_doc(
     likely_cause: str,
     suggested_action: str,
     affected_users: str,
-    region: str = "unknown"
+    region: str = "unknown",
+    error_rate: str = "unknown",
+    latency_p99_ms: str = "N/A",
+    requests_per_minute: str = "N/A",
+    deployment_id: str = "unknown",
+    deployment_age_minutes: str = "unknown",
+    cpu_usage: str = "N/A",
+    memory_usage: str = "N/A",
+    error_logs: str = "",
+    similar_incidents: str = "",
+    analysis: str = ""
 ) -> dict:
     """
-    Create a new Google Doc for incident response with pre-formatted template.
-    
+    Create a new Google Doc for incident response with full diagnostic context.
+
     Returns:
         {
             "success": bool,
@@ -55,66 +65,87 @@ def create_incident_doc(
     """
     try:
         log.info(f"Creating incident doc for {incident_id}")
-        
-        # Create document
+
         docs_service = get_docs_service()
-        doc_body = {
+        doc = docs_service.documents().create(body={
             "title": f"[{severity}] {service} Incident - {incident_id}"
-        }
-        doc = docs_service.documents().create(body=doc_body).execute()
-        doc_id = doc['documentId']
-        
-        # Prepare content
-        detected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+        }).execute()
+        doc_id = doc["documentId"]
+
+        detected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        error_rate_pct = "unknown"
+        try:
+            error_rate_pct = f"{float(error_rate) * 100:.1f}%"
+        except (TypeError, ValueError):
+            pass
+
+        logs_section = error_logs.strip() if error_logs.strip() else "(no log data captured)"
+        similar_section = similar_incidents.strip() if similar_incidents.strip() else "(no similar past incidents found)"
+        analysis_section = analysis.strip() if analysis.strip() else "(analysis unavailable)"
+
+        dep_label = f"{deployment_id}"
+        if deployment_age_minutes not in ("unknown", "N/A", ""):
+            dep_label += f" — deployed {deployment_age_minutes} minutes before incident"
+
+        doc_content = f"""INCIDENT RESPONSE DOCUMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Incident ID:  {incident_id}
+Severity:     {severity}
+Status:       ACTIVE
+Service:      {service}
+Region:       {region}
+Detected At:  {detected_at}
+
+━━━ IMPACT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Description:      {description}
+Affected Users:   {affected_users}
+Error Rate:       {error_rate_pct}
+P99 Latency:      {latency_p99_ms}ms
+Requests/min:     {requests_per_minute}
+
+━━━ DEPLOYMENT CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Last Deployment:  {dep_label}
+
+━━━ DIAGNOSTIC SIGNALS ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CPU Usage:     {cpu_usage}
+Memory Usage:  {memory_usage}
+
+Error Logs:
+{logs_section}
+
+━━━ INCIDENT ANALYSIS (AI-generated) ━━━━━━━━━━━━
+
+{analysis_section}
+
+━━━ SIMILAR PAST INCIDENTS ━━━━━━━━━━━━━━━━━━━━━━
+
+{similar_section}
+
+━━━ TIMELINE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{detected_at}  — Incident detected, {incident_id} opened
+[ACKNOWLEDGED_TIME]
+[RESOLVED_TIME]
+
+━━━ RESOLUTION NOTES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[What was done to resolve — add via Chat: resolution {incident_id} <what you did>]
+
+━━━ POST-MORTEM ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[POST-MORTEM]
+"""
+
         requests = [
             {
                 "insertText": {
-                    "text": f"""
-INCIDENT RESPONSE DOCUMENT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Incident ID: {incident_id}
-Severity: {severity}
-Service: {service}
-Detected At: {detected_at}
-
-OVERVIEW
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Description: {description}
-
-Affected Users: {affected_users}
-Region: {region}
-
-ROOT CAUSE ANALYSIS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Likely Cause: {likely_cause}
-
-SUGGESTED ACTION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-{suggested_action}
-
-TIMELINE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-{detected_at} - Incident detected
-[Acknowledge Time]
-[Resolution Time]
-
-SIMILAR PAST INCIDENTS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-[Will be auto-populated with RAG results]
-
-POST-MORTEM
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-[To be filled after resolution]
-""",
-                    "location": {"index": 1}
+                    "text": doc_content,
+                    "location": {"index": 1},
                 }
             }
         ]
