@@ -1,4 +1,6 @@
 from fastmcp import FastMCP
+import json
+import re
 import requests
 import sys
 import os
@@ -13,8 +15,6 @@ from logger import get_mcp_logger
 log = get_mcp_logger("github_mcp_server")
 load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
-mcp = FastMCP("github-server")
-
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")
 
@@ -22,9 +22,13 @@ GITHUB_REPO = os.getenv("GITHUB_REPO", "")
 if "/" in GITHUB_REPO:
     _owner, _repo = GITHUB_REPO.split("/", 1)
 else:
+    if GITHUB_REPO:  # set but malformed
+        log.warning("GITHUB_REPO is set but missing '/': %s — falling back to demo mode", GITHUB_REPO)
     _owner, _repo = "", ""
 
 GITHUB_API_BASE = "https://api.github.com"
+
+mcp = FastMCP("github-server")
 
 
 def _github_headers() -> dict:
@@ -184,7 +188,6 @@ def get_deployment_info(deployment_id: str) -> dict:
         ).get("login") or commit_data.get("author", {}).get("name", "unknown")
 
         # Try to extract PR number from commit message (GitHub convention: #NNN)
-        import re
         pr_match = re.search(r"#(\d+)", commit_data.get("message", ""))
         pr_number = int(pr_match.group(1)) if pr_match else None
 
@@ -257,7 +260,10 @@ def get_recent_commits(service_name: str, hours_back: int = 4) -> dict:
     """
     if not _credentials_available():
         log.info(f"Demo mode: returning demo recent commits for {service_name}")
-        result = dict(_DEMO_RECENT_COMMITS)
+        # Deep-copy via JSON and replace hardcoded "payments" with the actual service name
+        result = json.loads(
+            json.dumps(_DEMO_RECENT_COMMITS).replace("payments", service_name.replace("-service", "").replace("_service", ""))
+        )
         result["service_name"] = service_name
         result["hours_back"] = hours_back
         return result
@@ -288,7 +294,7 @@ def get_recent_commits(service_name: str, hours_back: int = 4) -> dict:
         ]
 
         result_commits = []
-        for c in commits_raw:
+        for c in commits_raw[:10]:
             sha = c["sha"]
             commit_data = c.get("commit", {})
             author = (
@@ -342,6 +348,8 @@ def get_recent_commits(service_name: str, hours_back: int = 4) -> dict:
         log.error(f"Error fetching recent commits for {service_name}: {e}")
         return {"success": False, "error": str(e)}
 
+
+log.info("GitHub MCP ready — %s mode | repo: %s", "live" if _credentials_available() else "DEMO", GITHUB_REPO or "not set")
 
 if __name__ == "__main__":
     log.info("GitHub MCP server starting on stdio transport")

@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "google-pulse"
 version = "0.1.0"
-description = "Add your description here"
+description = "Crisis-Command Multi-Agent Incident Response System"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -15,4 +19,20 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "sqlalchemy>=2.0.48",
     "uvicorn>=0.42.0",
+    "requests>=2.31.0",
 ]
+
+[tool.setuptools]
+packages = [
+    "auth",
+    "webhook",
+    "orchestrator",
+    "database",
+    "simulator",
+    "agents",
+    "agents.chat_agent",
+    "agents.docs_agent",
+    "agents.calendar_agent",
+    "agents.github_agent",
+]
+py-modules = ["config", "logger"]
